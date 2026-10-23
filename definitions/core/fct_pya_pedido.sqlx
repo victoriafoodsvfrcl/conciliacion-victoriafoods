@@ -1,0 +1,146 @@
+config {
+  type: "table",
+  schema: "core",
+  tags: ["pya"],
+  description: "Cálculos por pedido PYA (Tipo=Venta). ESPEJO de reglas.pya.calcular_pedido. Grano: (periodo_inicio, numero_pedido).",
+  bigquery: { partitionBy: "periodo_inicio", clusterBy: ["cc", "numero_pedido"] },
+  assertions: { uniqueKey: ["periodo_inicio", "numero_pedido"], nonNull: ["por_cobrar", "monto_caja"] }
+}
+
+js {
+  const c = constantes;
+}
+
+WITH lineas AS (
+  SELECT * FROM ${ref("fct_pya_linea")}
+),
+venta AS (
+  -- duplicados reales (mismo pedido y tipo en el periodo) se cuentan UNA vez por pedido;
+  -- la conciliación semanal sí suma todas las líneas, igual que el PDF.
+  SELECT * FROM lineas WHERE tipo = 'Venta' AND ocurrencia = 1
+),
+
+-- Compensación por reclamo: filas Cargos con K < 0 del pedido; en marcas configuradas también
+-- Reintegros PARCIALES (0 < |K| < neto venta). Espejo: reglas.pya.compensacion_pedido.
+compensacion AS (
+  SELECT
+    v.periodo_inicio,
+    v.numero_pedido,
+    SUM(CASE
+      WHEN o.tipo = 'Cargos' AND o.neto_venta < 0 THEN ABS(o.neto_venta)
+      WHEN o.tipo = 'Reintegros'
+        AND v.marca IN (${c.lista(c.MARCAS_REINTEGRO_PARCIAL_COMO_COMPENSACION)})
+        AND ABS(o.neto_venta) > 0 AND ABS(o.neto_venta) < ABS(v.neto_venta) THEN ABS(o.neto_venta)
+      ELSE 0
+    END) AS compensacion
+  FROM venta AS v
+  JOIN lineas AS o ON o.numero_pedido = v.numero_pedido AND o.tipo != 'Venta'
+  GROUP BY v.periodo_inicio, v.numero_pedido
+),
+
+-- TODO(regla pendiente — docs/preguntas_abiertas.md #5): "Cancelaciones de Agregador".
+-- Fuente candidata: filas Tipo=Reintegros que devuelven el TOTAL del pedido (|K| >= neto venta),
+-- relacionadas con "Reintegros por pedidos cancelados por los usuarios" del PDF.
+-- Deshabilitada mientras HABILITAR_CANCELACIONES = false (espejo: reglas.pya.cancelacion_pedido).
+cancelacion AS (
+  SELECT v.periodo_inicio, v.numero_pedido, SUM(ABS(o.neto_venta)) AS cancelacion
+  FROM venta AS v
+  JOIN lineas AS o ON o.numero_pedido = v.numero_pedido AND o.tipo = 'Reintegros'
+  WHERE ${c.HABILITAR_CANCELACIONES ? "TRUE" : "FALSE"}
+    AND v.neto_venta != 0 AND ABS(o.neto_venta) >= ABS(v.neto_venta)
+  GROUP BY v.periodo_inicio, v.numero_pedido
+),
+
+-- Boleta: IDTE con prefijo PYA cuyo id_externo = Numero de Pedido
+boleta AS (
+  SELECT
+    id_externo,
+    ARRAY_AGG(STRUCT(folio, monto_total, fecha_dte, check_number, sucursal_norm)
+              ORDER BY fecha_hora_emision DESC, folio DESC LIMIT 1)[OFFSET(0)] AS b,
+    COUNT(*) AS n_boletas
+  FROM ${ref("stg_idte_boletas")}
+  WHERE canal_prefijo = 'PYA' AND id_externo IS NOT NULL AND tipo_dte IN (${c.lista(c.TIPOS_DTE_VENTA)})
+  GROUP BY id_externo
+),
+alias_idte AS (
+  SELECT alias_normalizado, IF(COUNT(DISTINCT cc) = 1, ANY_VALUE(cc), NULL) AS cc
+  FROM ${ref("dim_local_alias")} WHERE sistema = 'idte' GROUP BY alias_normalizado
+),
+alias_aloha AS (
+  SELECT alias_normalizado, IF(COUNT(DISTINCT cc) = 1, ANY_VALUE(cc), NULL) AS cc
+  FROM ${ref("dim_local_alias")} WHERE sistema = 'aloha' GROUP BY alias_normalizado
+),
+-- Día de negocio Aloha de la boleta: IDTE.Pedido = Aloha.CheckNumber en el mismo CC (DOB = fecha DTE o el día anterior)
+aloha_pedido AS (
+  SELECT v.periodo_inicio, v.numero_pedido, MIN(o.date_of_business) AS fecha_aloha
+  FROM venta AS v
+  JOIN boleta AS bo ON bo.id_externo = v.numero_pedido
+  JOIN alias_idte AS ai ON ai.alias_normalizado = bo.b.sucursal_norm
+  JOIN ${ref("stg_aloha_ordenes")} AS o
+    ON o.check_number = bo.b.check_number
+   AND o.date_of_business BETWEEN DATE_SUB(bo.b.fecha_dte, INTERVAL 1 DAY) AND bo.b.fecha_dte
+   AND NOT o.es_anulacion
+  JOIN alias_aloha AS aa ON aa.alias_normalizado = o.tienda_norm AND aa.cc = ai.cc
+  GROUP BY v.periodo_inicio, v.numero_pedido
+),
+
+-- Regla de FECHA REAL aislada (hipótesis pendiente; espejo: reglas.pya.fecha_real).
+fecha_real AS (
+  SELECT periodo_inicio, numero_pedido, ${c.fechaReal()} AS fecha_real
+  FROM (
+    SELECT v.periodo_inicio, v.numero_pedido, v.fecha_pedido, bo.b.fecha_dte AS fecha_boleta, ap.fecha_aloha
+    FROM venta AS v
+    LEFT JOIN boleta AS bo ON bo.id_externo = v.numero_pedido
+    LEFT JOIN aloha_pedido AS ap USING (periodo_inicio, numero_pedido)
+  )
+),
+
+base AS (
+  SELECT
+    v.periodo, v.periodo_inicio, v.periodo_fin, v.numero_pedido, v.cc, v.marca, v.sucursal, v.sucursal_norm,
+    v.nombre_plataforma, v.fecha_pedido, fr.fecha_real,
+    v.monto_bruto, v.dcto_comercial_pya_neto, v.dcto_local, v.dcto_usuarios_pya_neto, v.dcto_retiro_pya_neto,
+    v.fugaz, v.neto_venta, v.monto_comisionable, v.comision, v.cargo_plus, v.metodo_pago, v.metodo_entrega,
+    v.n_ocurrencias,
+    -- sin redondear al guardar; se redondea en los marts
+    v.dcto_usuarios_pya_neto * ${c.N_FACTOR_IVA} AS dctos_pya_usuarios_bruto,
+    COALESCE(cp.compensacion, 0) AS compensacion,
+    COALESCE(ca.cancelacion, 0) AS cancelacion,
+    bo.b.folio AS folio_doc,
+    bo.b.monto_total AS monto_doc,
+    bo.b.fecha_dte AS fecha_boleta,
+    COALESCE(bo.n_boletas, 0) AS n_boletas,
+    ai.cc AS cc_boleta
+  FROM venta AS v
+  LEFT JOIN compensacion AS cp USING (periodo_inicio, numero_pedido)
+  LEFT JOIN cancelacion AS ca USING (periodo_inicio, numero_pedido)
+  LEFT JOIN fecha_real AS fr USING (periodo_inicio, numero_pedido)
+  LEFT JOIN boleta AS bo ON bo.id_externo = v.numero_pedido
+  LEFT JOIN alias_idte AS ai ON ai.alias_normalizado = bo.b.sucursal_norm
+),
+
+calc AS (
+  SELECT
+    *,
+    ROUND(neto_venta + dctos_pya_usuarios_bruto) AS por_cobrar,
+    comision + cargo_plus + fugaz - dcto_comercial_pya_neto - dcto_retiro_pya_neto AS com_neta,
+    comision + fugaz - dcto_comercial_pya_neto - dcto_usuarios_pya_neto - dcto_retiro_pya_neto AS com_provision,
+    -compensacion AS reembolsos,
+    COALESCE(folio_doc, '-') AS folio,
+    COALESCE(monto_doc, 0) AS monto_boleta,
+    IF(folio_doc IS NULL, 0, monto_doc - neto_venta) AS integracion
+  FROM base
+)
+
+SELECT
+  * EXCEPT (folio_doc, monto_doc),
+  com_neta * ${c.N_FACTOR_IVA} AS factura_comision_pedido,
+  por_cobrar - com_neta * ${c.N_FACTOR_IVA} AS monto_banco_pedido,
+  -- "Monto TD": lo que va a Innovaweb columna Pedidos YA
+  por_cobrar - ROUND(compensacion) AS monto_caja,
+  folio_doc IS NOT NULL AND ABS(integracion) > ${c.TOL_REDONDEO} AS integracion_reportable,
+  folio_doc IS NULL AS sin_boleta,
+  -- invariante: monto_caja − monto_boleta + (−dctos_bruto + |comp| + integracion) = 0 (±1) si hay boleta
+  (por_cobrar - ROUND(compensacion)) - monto_boleta + (-dctos_pya_usuarios_bruto + compensacion + integracion)
+    AS residuo_invariante
+FROM calc

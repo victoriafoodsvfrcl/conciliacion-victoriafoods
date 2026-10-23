@@ -1,0 +1,33 @@
+config {
+  type: "view",
+  schema: "staging",
+  tags: ["pya", "idte"],
+  description: "Boletas IDTE deduplicadas por (tipo_dte, folio): manda el último archivo ingestado.",
+  assertions: { uniqueKey: ["tipo_dte", "folio"] }
+}
+
+SELECT
+  tipo_dte,
+  nombre_dte,
+  fecha_dte,
+  fecha_hora_emision,
+  folio,
+  pedido AS check_number,
+  razon_receptor,
+  canal_prefijo,
+  id_externo,
+  monto_neto,
+  monto_iva,
+  monto_exento,
+  descuento_1,
+  glosa_descuento_1,
+  monto_total,
+  sucursal,
+  sucursal_norm,
+  caja,
+  estado_sii,
+  _archivo_id,
+  _archivo_nombre,
+  _fila
+FROM ${ref("idte_boletas")}
+QUALIFY ROW_NUMBER() OVER (PARTITION BY tipo_dte, folio ORDER BY _ingestado_en DESC, _fila) = 1

@@ -1,0 +1,36 @@
+config {
+  type: "view",
+  schema: "staging",
+  tags: ["pya", "aloha"],
+  description: "Órdenes Aloha. Para cada (marca, día de negocio) manda el último archivo ingestado (los archivos se solapan)."
+}
+
+WITH archivo_vigente AS (
+  SELECT
+    marca,
+    date_of_business,
+    ARRAY_AGG(_archivo_id ORDER BY _ingestado_en DESC LIMIT 1)[OFFSET(0)] AS archivo_id
+  FROM ${ref("aloha_ordenes")}
+  GROUP BY marca, date_of_business
+)
+
+SELECT
+  o.marca,
+  o.ticket_id,
+  o.date_of_business,
+  o.store_id,
+  o.order_mode,
+  o.tienda,
+  o.tienda_norm,
+  o.check_number,
+  o.impuesto,
+  o.bruto,
+  o.neto,
+  o.cliente,
+  o.canal,
+  o.es_anulacion,
+  o._archivo_id,
+  o._fila
+FROM ${ref("aloha_ordenes")} AS o
+JOIN archivo_vigente AS v
+  ON o.marca = v.marca AND o.date_of_business = v.date_of_business AND o._archivo_id = v.archivo_id

@@ -1,0 +1,10 @@
+config {
+  type: "assertion",
+  tags: ["pya", "maestra"],
+  description: "Un alias normalizado no puede apuntar a 2 CC distintos dentro del mismo sistema."
+}
+
+SELECT sistema, alias_normalizado, ARRAY_AGG(DISTINCT cc ORDER BY cc) AS ccs
+FROM ${ref("dim_local_alias")}
+GROUP BY sistema, alias_normalizado
+HAVING COUNT(DISTINCT cc) > 1

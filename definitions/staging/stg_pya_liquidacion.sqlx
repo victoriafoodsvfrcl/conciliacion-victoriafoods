@@ -1,0 +1,55 @@
+config {
+  type: "view",
+  schema: "staging",
+  tags: ["pya"],
+  description: "Detalle de liquidación PYA limpio. Si un periodo llegó en varios archivos manda el último ingestado. Marca duplicados (mismo pedido y tipo en el periodo).",
+  columns: {
+    linea_id: "Id estable de la línea (archivo|hoja|fila)",
+    ocurrencia: "1..n dentro de (periodo, pedido, tipo); >1 = duplicado",
+    n_ocurrencias: "Cantidad de veces que aparece (periodo, pedido, tipo)"
+  }
+}
+
+WITH archivo_vigente AS (
+  SELECT
+    periodo_inicio,
+    ARRAY_AGG(_archivo_id ORDER BY _ingestado_en DESC LIMIT 1)[OFFSET(0)] AS archivo_id
+  FROM ${ref("pya_liquidacion_detalle")}
+  GROUP BY periodo_inicio
+)
+
+SELECT
+  TO_HEX(SHA256(CONCAT(d._archivo_id, '|', COALESCE(d._hoja, ''), '|', CAST(d._fila AS STRING)))) AS linea_id,
+  d.periodo,
+  d.periodo_inicio,
+  d.periodo_fin,
+  d.tipo,
+  d.numero_pedido,
+  d.sucursal,
+  d.sucursal_norm,
+  d.fecha_pedido,
+  COALESCE(d.monto_bruto, 0) AS monto_bruto,
+  COALESCE(d.dcto_comercial_pya_neto, 0) AS dcto_comercial_pya_neto,
+  COALESCE(d.dcto_local, 0) AS dcto_local,
+  COALESCE(d.dcto_usuarios_pya_neto, 0) AS dcto_usuarios_pya_neto,
+  COALESCE(d.dcto_retiro_pya_neto, 0) AS dcto_retiro_pya_neto,
+  COALESCE(d.fugaz, 0) AS fugaz,
+  COALESCE(d.envio_local, 0) AS envio_local,
+  COALESCE(d.neto_venta, 0) AS neto_venta,
+  COALESCE(d.monto_comisionable, 0) AS monto_comisionable,
+  d.pct_comision,
+  COALESCE(d.comision, 0) AS comision,
+  COALESCE(d.cargo_plus, 0) AS cargo_plus,
+  d.metodo_pago,
+  d.cobrado_por,
+  d.metodo_entrega,
+  d.es_plus,
+  ROW_NUMBER() OVER (PARTITION BY d.periodo_inicio, d.numero_pedido, d.tipo ORDER BY d._hoja, d._fila) AS ocurrencia,
+  COUNT(*) OVER (PARTITION BY d.periodo_inicio, d.numero_pedido, d.tipo) AS n_ocurrencias,
+  d._archivo_id,
+  d._archivo_nombre,
+  d._hoja,
+  d._fila
+FROM ${ref("pya_liquidacion_detalle")} AS d
+JOIN archivo_vigente AS v
+  ON d.periodo_inicio = v.periodo_inicio AND d._archivo_id = v.archivo_id

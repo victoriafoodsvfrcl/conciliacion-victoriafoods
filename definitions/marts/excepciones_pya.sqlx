@@ -1,0 +1,85 @@
+config {
+  type: "table",
+  schema: "marts",
+  tags: ["pya"],
+  description: "Excepciones de la conciliación PYA (tipo, severidad, cc, fecha, pedido, detalle)."
+}
+
+js {
+  const c = constantes;
+}
+
+WITH semana AS (SELECT * FROM ${ref("fct_pya_semana")}),
+rango AS (SELECT MIN(periodo_inicio) AS ini, MAX(periodo_fin) AS fin FROM ${ref("fct_pya_linea")}),
+alias_idte AS (
+  SELECT alias_normalizado, IF(COUNT(DISTINCT cc) = 1, ANY_VALUE(cc), NULL) AS cc
+  FROM ${ref("dim_local_alias")} WHERE sistema = 'idte' GROUP BY alias_normalizado
+),
+boletas_pya AS (
+  SELECT b.*, ai.cc
+  FROM ${ref("stg_idte_boletas")} AS b
+  LEFT JOIN alias_idte AS ai ON ai.alias_normalizado = b.sucursal_norm
+  WHERE b.canal_prefijo = 'PYA'
+)
+
+SELECT 'PEDIDO_SIN_BOLETA' AS tipo, 'MEDIA' AS severidad, cc, fecha_real AS fecha, numero_pedido AS pedido,
+  FORMAT('Pedido %s sin boleta IDTE (neto %s)', numero_pedido, CAST(neto_venta AS STRING)) AS detalle
+FROM ${ref("fct_pya_pedido")} WHERE sin_boleta
+
+UNION ALL
+SELECT 'SUCURSAL_SIN_CC', 'ALTA', NULL, MIN(fecha_pedido), NULL,
+  FORMAT('Sucursal PYA "%s" sin centro de costo en la maestra (sistema=pya, %d líneas)', sucursal, COUNT(*))
+FROM ${ref("fct_pya_linea")} WHERE cc IS NULL GROUP BY sucursal
+
+UNION ALL
+SELECT 'SUCURSAL_SIN_CC', 'ALTA', NULL, MIN(fecha_dte), NULL,
+  FORMAT('Sucursal IDTE "%s" sin centro de costo en la maestra (sistema=idte, %d boletas PYA)', sucursal, COUNT(*))
+FROM boletas_pya WHERE cc IS NULL GROUP BY sucursal
+
+UNION ALL
+SELECT 'PEDIDO_DUPLICADO', 'MEDIA', cc, fecha_pedido, numero_pedido,
+  FORMAT('Pedido %s aparece %d veces como %s en el periodo %s', numero_pedido, n_ocurrencias, tipo, periodo)
+FROM ${ref("fct_pya_linea")} WHERE n_ocurrencias > 1 AND ocurrencia = 1
+
+UNION ALL
+SELECT 'INTEGRACION', 'BAJA', cc, fecha_real, numero_pedido,
+  FORMAT('Boleta %s por %s vs neto %s (integración %s)', folio, CAST(monto_boleta AS STRING),
+         CAST(neto_venta AS STRING), CAST(ROUND(integracion) AS STRING))
+FROM ${ref("fct_pya_pedido")} WHERE integracion_reportable
+
+UNION ALL
+SELECT 'SEMANA_NO_CUADRA_PDF', 'ALTA', NULL, periodo_fin, NULL,
+  FORMAT('Periodo %s: liquidación calculada %s vs PDF %s (dif %s)', periodo, CAST(liquidacion_calc AS STRING),
+         CAST(total_pdf AS STRING), CAST(dif_liquidacion_pdf AS STRING))
+FROM semana WHERE 'SEMANA_NO_CUADRA_PDF' IN UNNEST(excepciones)
+
+UNION ALL
+SELECT 'ABONO_NO_ENCONTRADO', 'ALTA', NULL, periodo_fin, NULL,
+  FORMAT('Periodo %s: no hay abono PYA de %s (±%d) entre %t y %t', COALESCE(periodo, CAST(periodo_inicio AS STRING)),
+         CAST(total_pdf AS STRING), ${c.TOL_BANCO},
+         DATE_ADD(periodo_fin, INTERVAL ${c.VENTANA_ABONO_MIN} DAY), DATE_ADD(periodo_fin, INTERVAL ${c.VENTANA_ABONO_MAX} DAY))
+FROM semana WHERE 'ABONO_NO_ENCONTRADO' IN UNNEST(excepciones) AND total_pdf IS NOT NULL
+
+UNION ALL
+SELECT tipo_exc, 'ALTA', NULL, periodo_fin, NULL,
+  FORMAT('Periodo %s: factura PYA del %t %s (neto calc %s, factura %s)', COALESCE(periodo, CAST(periodo_inicio AS STRING)),
+         DATE_ADD(periodo_fin, INTERVAL 1 DAY), IF(tipo_exc = 'FACTURA_NO_ENCONTRADA', 'no encontrada', 'no cuadra'),
+         CAST(neto_factura_calc AS STRING), COALESCE(CAST(factura_neto AS STRING), '-'))
+FROM semana, UNNEST(excepciones) AS tipo_exc WHERE tipo_exc IN ('FACTURA_NO_ENCONTRADA', 'FACTURA_NO_CUADRA')
+
+UNION ALL
+SELECT 'ABONO_PYA_NO_ASIGNADO', 'ALTA', NULL, m.fecha_contable, NULL,
+  FORMAT('Abono PYA %s del %t (op %s) sin liquidación asociada', CAST(m.monto AS STRING), m.fecha_contable,
+         COALESCE(m.nro_operacion, '-'))
+FROM ${ref("stg_bci_movimientos")} AS m
+WHERE m.rut_origen = '${c.RUT_PYA}' AND m.monto > 0
+  AND m.movimiento_id NOT IN (SELECT abono_movimiento_id FROM semana WHERE abono_movimiento_id IS NOT NULL)
+
+UNION ALL
+SELECT 'BOLETA_PYA_SIN_PEDIDO', 'MEDIA', b.cc, b.fecha_dte, b.id_externo,
+  FORMAT('Boleta %s (%s) con id PYA %s no está en el detalle de liquidación', b.folio, CAST(b.monto_total AS STRING),
+         COALESCE(b.id_externo, '?'))
+FROM boletas_pya AS b, rango
+WHERE b.fecha_dte BETWEEN rango.ini AND rango.fin
+  AND (b.id_externo IS NULL OR b.id_externo NOT IN (
+    SELECT numero_pedido FROM ${ref("fct_pya_linea")} WHERE tipo = 'Venta'))

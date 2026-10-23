@@ -1,0 +1,63 @@
+config {
+  type: "table",
+  schema: "marts",
+  tags: ["pya", "innovaweb"],
+  description: "Calculado vs lo cargado hoy en Innovaweb (caja 'Pedidos YA' y reembolsos de agregador PYA) por cc/fecha/concepto."
+}
+
+js {
+  const c = constantes;
+}
+
+WITH calc_caja AS (
+  SELECT cc, fecha_real AS fecha, 'Pedidos YA (caja)' AS concepto, SUM(monto_caja) AS calculado
+  FROM ${ref("fct_pya_pedido")} WHERE cc IS NOT NULL GROUP BY cc, fecha_real
+),
+iw_caja AS (
+  SELECT cc, fecha, 'Pedidos YA (caja)' AS concepto, SUM(monto) AS innovaweb
+  FROM ${ref("stg_innovaweb_caja")}
+  WHERE categoria = 'medio_pago' AND concepto_norm = 'PEDIDOS YA'
+  GROUP BY cc, fecha
+),
+calc_reemb AS (
+  SELECT
+    `Código centro costo` AS cc,
+    PARSE_DATE('%d/%m/%Y', `Fecha`) AS fecha,
+    `Medio de Pago` AS concepto,
+    SUM(`Valor`) AS calculado
+  FROM ${ref("out_innovaweb_reembolsos_pya")}
+  GROUP BY 1, 2, 3
+),
+iw_reemb AS (
+  SELECT cc, fecha_reporte AS fecha, tipo_recaudacion AS concepto, SUM(valor) AS innovaweb
+  FROM ${ref("stg_innovaweb_reembolsos")}
+  WHERE agregador_norm = 'PEDIDOS YA'
+  GROUP BY 1, 2, 3
+),
+unido AS (
+  SELECT COALESCE(a.cc, b.cc) AS cc, COALESCE(a.fecha, b.fecha) AS fecha, COALESCE(a.concepto, b.concepto) AS concepto,
+         a.calculado, b.innovaweb
+  FROM calc_caja AS a FULL OUTER JOIN iw_caja AS b ON a.cc = b.cc AND a.fecha = b.fecha
+  UNION ALL
+  SELECT COALESCE(a.cc, b.cc), COALESCE(a.fecha, b.fecha), COALESCE(a.concepto, b.concepto), a.calculado, b.innovaweb
+  FROM calc_reemb AS a
+  FULL OUTER JOIN iw_reemb AS b ON a.cc = b.cc AND a.fecha = b.fecha AND a.concepto = b.concepto
+)
+
+SELECT
+  u.cc,
+  dl.marca,
+  dl.nombre_plataforma AS sucursal,
+  u.fecha,
+  u.concepto,
+  COALESCE(u.calculado, 0) AS calculado,
+  COALESCE(u.innovaweb, 0) AS innovaweb,
+  COALESCE(u.calculado, 0) - COALESCE(u.innovaweb, 0) AS diferencia,
+  CASE
+    WHEN u.innovaweb IS NULL THEN 'FALTA_EN_INNOVAWEB'
+    WHEN u.calculado IS NULL THEN 'SOLO_EN_INNOVAWEB'
+    WHEN ABS(u.calculado - u.innovaweb) <= ${c.TOL_REDONDEO} THEN 'OK'
+    ELSE 'DIFERENCIA'
+  END AS estado
+FROM unido AS u
+LEFT JOIN ${ref("dim_local")} AS dl ON dl.cc = u.cc

@@ -1,0 +1,47 @@
+config {
+  type: "view",
+  schema: "staging",
+  tags: ["pya", "banco"],
+  description: "Movimientos BCI deduplicados por movimiento_id (cartolas con rangos solapados). La contraparte se recalcula con ref_contrapartes (RUT primero, luego patrón de nombre/glosa).",
+  assertions: { uniqueKey: ["movimiento_id"] }
+}
+
+WITH mov AS (
+  SELECT * FROM ${ref("bci_movimientos")}
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY movimiento_id ORDER BY _ingestado_en DESC) = 1
+),
+por_rut AS (
+  SELECT rut, ANY_VALUE(contraparte) AS contraparte
+  FROM ${ref("ref_contrapartes")}
+  WHERE rut IS NOT NULL
+  GROUP BY rut
+),
+por_nombre AS (
+  SELECT mov.movimiento_id, ANY_VALUE(r.contraparte) AS contraparte
+  FROM mov
+  JOIN ${ref("ref_contrapartes")} AS r
+    ON r.patron_nombre IS NOT NULL
+   AND REGEXP_CONTAINS(UPPER(CONCAT(COALESCE(mov.nombre_origen, ''), ' ', COALESCE(mov.glosa_detalle, ''))), r.patron_nombre)
+  GROUP BY mov.movimiento_id
+)
+
+SELECT
+  mov.movimiento_id,
+  mov.cuenta,
+  mov.rut_empresa,
+  mov.fecha_transaccion,
+  mov.fecha_contable,
+  mov.movimiento,
+  mov.cargo,
+  mov.abono,
+  mov.monto,
+  mov.glosa_detalle,
+  mov.rut_origen,
+  mov.nombre_origen,
+  mov.nro_operacion,
+  COALESCE(por_rut.contraparte, por_nombre.contraparte, mov.contraparte) AS contraparte,
+  mov._archivo_id,
+  mov._fila
+FROM mov
+LEFT JOIN por_rut ON por_rut.rut = mov.rut_origen
+LEFT JOIN por_nombre USING (movimiento_id)

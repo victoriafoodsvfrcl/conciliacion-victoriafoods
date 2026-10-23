@@ -1,0 +1,16 @@
+config {
+  type: "view",
+  schema: "staging",
+  tags: ["pya", "innovaweb"],
+  description: "Informe de caja Innovaweb en formato largo; por (cc, fecha) manda el último archivo ingestado."
+}
+
+WITH archivo_vigente AS (
+  SELECT cc, fecha, ARRAY_AGG(_archivo_id ORDER BY _ingestado_en DESC LIMIT 1)[OFFSET(0)] AS archivo_id
+  FROM ${ref("innovaweb_caja")}
+  GROUP BY cc, fecha
+)
+
+SELECT c.cc, c.sucursal, c.fecha, c.estado, c.concepto_original, c.concepto_norm, c.categoria, c.monto, c._archivo_id
+FROM ${ref("innovaweb_caja")} AS c
+JOIN archivo_vigente AS v ON c.cc = v.cc AND c.fecha = v.fecha AND c._archivo_id = v.archivo_id

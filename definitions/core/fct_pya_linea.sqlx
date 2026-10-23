@@ -1,0 +1,25 @@
+config {
+  type: "table",
+  schema: "core",
+  tags: ["pya"],
+  description: "Líneas del detalle de liquidación PYA (Venta/Cargos/Reintegros) con centro de costo y marca. Grano: línea del archivo.",
+  bigquery: { partitionBy: "periodo_inicio", clusterBy: ["numero_pedido"] },
+  assertions: { uniqueKey: ["linea_id"], nonNull: ["numero_pedido", "tipo", "periodo_inicio"] }
+}
+
+WITH alias_pya AS (
+  -- si un alias apunta a más de un CC (conflicto) se deja sin CC: lo reporta SUCURSAL_SIN_CC y assert_alias_unico
+  SELECT alias_normalizado, IF(COUNT(DISTINCT cc) = 1, ANY_VALUE(cc), NULL) AS cc
+  FROM ${ref("dim_local_alias")}
+  WHERE sistema = 'pya'
+  GROUP BY alias_normalizado
+)
+
+SELECT
+  l.*,
+  a.cc,
+  COALESCE(dl.marca, ${constantes.marcaDesdeNombre("l.sucursal_norm")}) AS marca,
+  dl.nombre_plataforma
+FROM ${ref("stg_pya_liquidacion")} AS l
+LEFT JOIN alias_pya AS a ON a.alias_normalizado = l.sucursal_norm
+LEFT JOIN ${ref("dim_local")} AS dl ON dl.cc = a.cc

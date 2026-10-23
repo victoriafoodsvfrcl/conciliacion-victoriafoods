@@ -1,0 +1,33 @@
+config {
+  type: "table",
+  schema: "marts",
+  tags: ["pya"],
+  description: "Una fila por semana PYA con cálculos, valores fuente, diferencias y estado OK/REVISAR.",
+  assertions: { uniqueKey: ["periodo_inicio"] }
+}
+
+SELECT
+  periodo_inicio,
+  periodo_fin,
+  periodo,
+  estado,
+  ARRAY_TO_STRING(excepciones, ', ') AS excepciones,
+  razon_social_pdf,
+  n_lineas,
+  n_lineas_venta,
+  -- detalle
+  k_venta, k_reintegros, k_cargos,
+  sum_comision, sum_plus, publicidad, sum_dcto_usuarios, sum_dcto_comercial, sum_dcto_retiro,
+  -- PDF
+  total_pdf, pdf_cuadra_internamente, fecha_pago_pdf, costo_envio, ajustes,
+  pdf_comision_pedidos, pdf_costo_plus, pdf_tarifa_fugaces, pdf_impuestos,
+  -- cálculos
+  neto_factura_calc,
+  ROUND(iva_calc) AS iva_calc,
+  liquidacion_calc,
+  dif_liquidacion_pdf,
+  -- banco
+  abono_fecha, abono_monto, abono_nro_operacion, dif_pdf_banco,
+  -- factura RCV
+  factura_folio, factura_fecha, factura_neto, factura_iva, dif_neto_factura, dif_iva_factura, dif_iva_factura_vs_pdf
+FROM ${ref("fct_pya_semana")}

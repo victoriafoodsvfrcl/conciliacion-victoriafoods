@@ -1,0 +1,12 @@
+config {
+  type: "table",
+  schema: "staging",
+  tags: ["banco"],
+  description: "Tabla configurable de contrapartes bancarias (desde includes/constantes.js -> CONTRAPARTES)."
+}
+
+SELECT * FROM UNNEST([
+  ${constantes.CONTRAPARTES.map(c =>
+    `STRUCT(${c.rut ? `'${c.rut}'` : "CAST(NULL AS STRING)"} AS rut, ${c.patron_nombre ? `r'${c.patron_nombre}'` : "CAST(NULL AS STRING)"} AS patron_nombre, '${c.contraparte}' AS contraparte)`
+  ).join(",\n  ")}
+])
