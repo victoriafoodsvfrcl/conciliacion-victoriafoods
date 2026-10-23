@@ -1,0 +1,23 @@
+config {
+  type: "view",
+  schema: "staging",
+  tags: ["pya", "sii"],
+  description: "Registro de compras SII deduplicado por (rut_proveedor, tipo_doc, folio).",
+  assertions: { uniqueKey: ["rut_proveedor", "tipo_doc", "folio"] }
+}
+
+SELECT
+  rut_proveedor,
+  razon_social,
+  razon_social_norm,
+  tipo_doc,
+  folio,
+  fecha_docto,
+  monto_exento,
+  monto_neto,
+  monto_iva_recuperable AS monto_iva,
+  monto_total,
+  _archivo_id,
+  _fila
+FROM ${ref("sii_rcv_compras")}
+QUALIFY ROW_NUMBER() OVER (PARTITION BY rut_proveedor, tipo_doc, folio ORDER BY _ingestado_en DESC) = 1

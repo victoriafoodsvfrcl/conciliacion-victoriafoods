@@ -1,0 +1,13 @@
+config {
+  type: "table",
+  schema: "core",
+  tags: ["pya", "maestra"],
+  description: "Alias de cada local por sistema (pya, idte, aloha, plataforma, uber, rpi, ...). Llave de JOIN: (sistema, alias_normalizado). Ver assertion assert_alias_unico.",
+  bigquery: { clusterBy: ["sistema", "alias_normalizado"] }
+}
+
+SELECT cc, marca, sistema, alias_original, alias_normalizado
+FROM ${ref("maestra_dim_local_alias")}
+WHERE _archivo_id = (
+  SELECT ARRAY_AGG(_archivo_id ORDER BY _ingestado_en DESC LIMIT 1)[OFFSET(0)] FROM ${ref("maestra_dim_local_alias")}
+)

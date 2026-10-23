@@ -1,0 +1,10 @@
+config {
+  type: "assertion",
+  tags: ["pya"],
+  description: "Por pedido con boleta: monto_caja − monto_boleta + (−dctos_pya_usuarios_bruto + |compensación| + integración) = 0 (±TOL_REDONDEO)."
+}
+
+SELECT periodo_inicio, numero_pedido, cc, monto_caja, monto_boleta, dctos_pya_usuarios_bruto, compensacion,
+       integracion, residuo_invariante
+FROM ${ref("fct_pya_pedido")}
+WHERE NOT sin_boleta AND ABS(residuo_invariante) > ${constantes.TOL_REDONDEO}

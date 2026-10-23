@@ -1,0 +1,72 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Variables del repositorio (Settings > Secrets and variables > Actions > Variables), salidas de Terraform:
+#   GCP_PROJECT_ID, GCP_REGION, GCP_WIF_PROVIDER, GCP_DEPLOY_SA, GCP_AR_REPO (p.ej. conciliacion), GCP_JOB_NAME
+# No se usan llaves JSON: autenticación por Workload Identity Federation.
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/conciliacion
+
+jobs:
+  imagen:
+    name: Build + push imagen y actualizar Cloud Run Job
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Docker login Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Build y push
+        run: |
+          docker build -t "$IMAGE:${GITHUB_SHA}" -t "$IMAGE:${GITHUB_REF_NAME//\//-}" .
+          docker push --all-tags "$IMAGE"
+
+      - name: Actualizar Cloud Run Job
+        run: |
+          gcloud run jobs update "${{ vars.GCP_JOB_NAME }}" \
+            --image "$IMAGE:${GITHUB_SHA}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --project "${{ vars.GCP_PROJECT_ID }}"
+
+  dataform:
+    name: Publicar proyecto Dataform (rama dataform-release)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compilar antes de publicar
+        working-directory: dataform
+        run: npx --yes @dataform/cli@3.0.0 compile
+      - name: git subtree split dataform/ -> dataform-release
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git subtree split --prefix dataform -b dataform-release
+          git push origin dataform-release --force

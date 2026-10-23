@@ -1,0 +1,42 @@
+config {
+  type: "view",
+  schema: "staging",
+  tags: ["pya"],
+  description: "Estado de cuenta semanal PYA (PDF): cabecera + partidas pivoteadas por concepto canónico. Último archivo por periodo.",
+  assertions: { uniqueKey: ["periodo_inicio"] }
+}
+
+WITH cab AS (
+  SELECT * FROM ${ref("pya_estado_cuenta_cabecera")}
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY periodo_inicio ORDER BY _ingestado_en DESC) = 1
+),
+part AS (
+  SELECT p.* FROM ${ref("pya_estado_cuenta_partidas")} AS p
+  JOIN cab USING (_archivo_id)
+)
+
+SELECT
+  cab.periodo_inicio,
+  cab.periodo_fin,
+  cab.razon_social,
+  cab.total_liquidado,
+  cab.suma_partidas,
+  cab.diferencia_validacion,
+  cab.cuadra,
+  cab.fecha_pago,
+  cab.banco,
+  cab.cuenta_terminacion,
+  ${["total_pagado_usuarios", "total_pago_app", "total_pago_fuera_app", "servicios_pya", "comision_pedidos",
+     "cargos_operativos", "cargos_rechazo", "cargos_reclamos", "costo_plus", "costos_envio", "publicidad",
+     "tarifa_fugaces", "reintegros", "dcto_usuarios_pya", "dcto_productos_pya", "dcto_retiro_pya",
+     "reintegro_cancelados", "iva_dctos_no_facturados", "ajustes_liquidacion", "saldo_pendiente_anterior",
+     "cargos_reintegros_adicionales", "impuestos", "iva_comisiones", "total_fuera_app_ya_cobrado"]
+    .map(c => `SUM(IF(part.concepto_canonico = '${c}', part.monto, NULL)) AS ${c}`).join(",\n  ")},
+  cab._archivo_id,
+  cab._archivo_nombre
+FROM cab
+LEFT JOIN part USING (_archivo_id)
+GROUP BY
+  cab.periodo_inicio, cab.periodo_fin, cab.razon_social, cab.total_liquidado, cab.suma_partidas,
+  cab.diferencia_validacion, cab.cuadra, cab.fecha_pago, cab.banco, cab.cuenta_terminacion,
+  cab._archivo_id, cab._archivo_nombre

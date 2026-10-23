@@ -1,0 +1,13 @@
+config {
+  type: "table",
+  schema: "core",
+  tags: ["pya", "maestra"],
+  description: "Locales (centro de costo) según la última maestra 'Locales - CC.xlsx' cargada.",
+  assertions: { uniqueKey: ["cc"], nonNull: ["cc", "marca"] }
+}
+
+SELECT cc, marca, nombre_plataforma
+FROM ${ref("maestra_dim_local")}
+WHERE _archivo_id = (
+  SELECT ARRAY_AGG(_archivo_id ORDER BY _ingestado_en DESC LIMIT 1)[OFFSET(0)] FROM ${ref("maestra_dim_local")}
+)

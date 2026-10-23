@@ -1,0 +1,9 @@
+config {
+  type: "assertion",
+  tags: ["pya"],
+  description: "El PDF del estado de cuenta debe cuadrar internamente: Σ secciones = Total liquidado."
+}
+
+SELECT periodo_inicio, periodo_fin, total_liquidado, suma_partidas, diferencia_validacion, _archivo_nombre
+FROM ${ref("stg_pya_estado_cuenta")}
+WHERE NOT cuadra

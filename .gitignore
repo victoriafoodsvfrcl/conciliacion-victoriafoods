@@ -1,0 +1,44 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Datos locales: NUNCA versionar archivos reales de las fuentes
+salida_local/
+datos/
+*.xls
+*.xlsx
+*.csv
+*.pdf
+!docs/**/*.csv
+
+# Dataform
+dataform/node_modules/
+dataform/.df-credentials.json
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/terraform.tfvars
+infra/terraform/*.auto.tfvars
+
+# Secretos / credenciales
+.env
+*.json.key
+*-sa.json
+credentials*.json
+
+# Editor / SO
+.idea/
+.vscode/
+.DS_Store
+*.zip

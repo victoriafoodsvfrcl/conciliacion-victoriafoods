@@ -1,0 +1,15 @@
+# Copiar a terraform.tfvars (no versionar terraform.tfvars).
+project_id           = "vf-conciliacion-prod"
+environment          = "prod"
+region               = "southamerica-west1"
+scheduler_region     = "southamerica-east1" # Cloud Scheduler no está disponible en southamerica-west1
+bq_location          = "southamerica-west1"
+dataform_region      = "southamerica-west1"
+github_owner         = "<organizacion-o-usuario-github>"
+github_repo          = "conciliacion-victoriafoods"
+graph_tenant_id      = "00000000-0000-0000-0000-000000000000"
+graph_client_id      = "00000000-0000-0000-0000-000000000000"
+sharepoint_hostname  = "vfrinversiones.sharepoint.com"
+sharepoint_site_path = "sites/teconologavictoriafoods"
+sharepoint_drive     = "Documentos"
+sharepoint_folder    = "AI - Recaudación"

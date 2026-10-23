@@ -1,0 +1,77 @@
+# Configuración de negocio de los adaptadores (no contiene secretos).
+# Se puede sobreescribir con un YAML propio apuntado por la variable CONCILIACION_CONFIG
+# (merge profundo sobre este archivo).
+
+pya_liquidacion_detalle:
+  # nombre de hoja normalizado (mayúsculas, sin tildes) -> Tipo. Si una hoja no está aquí,
+  # no está en hojas_ignorar y no trae columna "Tipo", el adaptador FALLA (no adivina).
+  hojas_tipo:
+    VENTA: Venta
+    VENTAS: Venta
+    PEDIDOS: Venta
+    CARGO: Cargos
+    CARGOS: Cargos
+    REINTEGRO: Reintegros
+    REINTEGROS: Reintegros
+  hojas_ignorar: [RESUMEN, INSTRUCCIONES]
+  # Orden de fecha por defecto si el archivo no trae evidencia (se intenta antes con el rango
+  # del periodo derivado del nombre del archivo).
+  orden_fecha_defecto: mdy
+
+idte_boletas:
+  # prefijo de RznRecp -> regex del id externo (último token tras ' - ').
+  # null = el canal no trae id utilizable (se deja id_externo NULL).
+  # El orden importa: se evalúan de arriba hacia abajo (PC OLO antes que OLO).
+  prefijos:
+    - {prefijo: "PC OLO", patron_id: null}
+    - {prefijo: "PYA", patron_id: "^\\d{10}$"}
+    - {prefijo: "UE", patron_id: "^[0-9A-Fa-f]{5}$"}
+    - {prefijo: "RPI", patron_id: "^\\d{9}$"}
+    - {prefijo: "JTO", patron_id: "^\\d{8}$"}
+    - {prefijo: "TOT", patron_id: null}
+    - {prefijo: "OLO", patron_id: null}
+    - {prefijo: "GOODMEAL", patron_id: null}
+
+aloha_ordenes:
+  # marca detectada desde el nombre de archivo (en este orden; "Under Express" antes que "Under")
+  marcas_por_nombre:
+    - {patron: "under\\s*express|express", marca: EXPRESS}
+    - {patron: "feel\\s*good", marca: FEELGOOD}
+    - {patron: "under", marca: UNDER}
+    - {patron: "melt", marca: MELT}
+  # orden de fecha por marca si el archivo no trae evidencia
+  orden_fecha_por_marca: {MELT: mdy, EXPRESS: mdy, UNDER: dmy, FEELGOOD: mdy}
+
+bci_cartola:
+  # Clasificación de contrapartes por RUT de origen (o por patrón de nombre si no hay RUT).
+  contrapartes:
+    - {rut: "76211425-9", contraparte: PEDIDOSYA}
+    - {rut: "77099356-3", contraparte: UBER}
+    - {rut: "76837223-3", contraparte: RAPPI}
+    - {rut: "77190661-3", contraparte: BCI_PAGOS}
+    - {rut: "77143385-5", contraparte: FINTOC}
+    - {patron_nombre: "MERCADO\\s*PAGO|MERCADOPAGO", contraparte: MERCADO_PAGO}
+
+innovaweb:
+  # columnas que NO son medios de pago en el informe de caja (encabezado normalizado)
+  caja_columnas_id: ["CODIGO CENTRO COSTO", "SUCURSAL", "FECHA DE INFORME", "CREADO POR", "ESTADO"]
+  caja_columnas_venta:
+    - "VENTAS ALOHA"
+    - "BOLETA ELECTRONICA"
+    - "BOLETA MANUAL"
+    - "BOLETA ANULADA"
+    - "FACTURA"
+    - "TOTAL VENTAS"
+    - "ALOHA - VENTAS"
+  caja_columnas_resumen:
+    - "TOTAL DE RECAUDACION"
+    - "SOBRANTE / FALTANTE DOCUMENTADO"
+    - "DIFERENCIA DE CAJA"
+    - "REEMBOLSOS PARCIALES"
+    - "RECAUDACION - VENTAS"
+
+maestra_locales:
+  # Si una fila de alias no trae Centro de Costo, ¿heredar el de la fila anterior?
+  heredar_cc_vacio: true
+  # valores que no son alias reales
+  valores_nulos: ["0", "-", "N/A", "NA"]

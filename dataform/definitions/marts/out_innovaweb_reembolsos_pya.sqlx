@@ -1,0 +1,48 @@
+config {
+  type: "table",
+  schema: "marts",
+  tags: ["pya", "innovaweb"],
+  description: "Archivo de reembolsos para Innovaweb. Espejo de reglas.pya.lineas_reembolso. Medio de Pago: Integración | Descuentos Pedidos Ya a Clientes | Compensaciones de Agregador | Cancelaciones de Agregador."
+}
+
+js {
+  const c = constantes;
+}
+
+WITH p AS (
+  SELECT
+    *,
+    ${c.agregadorPorMarca("marca")} AS agregador,
+    IF(folio = '-', '0', folio) AS folio_o_cero
+  FROM ${ref("fct_pya_pedido")}
+  WHERE cc IS NOT NULL
+),
+lineas AS (
+  SELECT cc, nombre_plataforma, sucursal, fecha_real, 1 AS orden, 'Integración' AS medio, agregador, numero_pedido,
+         folio AS boleta, CAST(ROUND(integracion) AS INT64) AS valor
+  FROM p WHERE integracion_reportable
+  UNION ALL
+  SELECT cc, nombre_plataforma, sucursal, fecha_real, 2, 'Descuentos Pedidos Ya a Clientes', agregador, numero_pedido,
+         folio_o_cero, -CAST(ROUND(dctos_pya_usuarios_bruto) AS INT64)
+  FROM p WHERE ROUND(dctos_pya_usuarios_bruto) != 0
+  UNION ALL
+  SELECT cc, nombre_plataforma, sucursal, fecha_real, 3, 'Compensaciones de Agregador', agregador, numero_pedido,
+         folio_o_cero, CAST(ROUND(compensacion) AS INT64)
+  FROM p WHERE ROUND(compensacion) != 0
+  UNION ALL
+  -- TODO(regla pendiente): ver CTE cancelacion en core/fct_pya_pedido.sqlx (HABILITAR_CANCELACIONES)
+  SELECT cc, nombre_plataforma, sucursal, fecha_real, 4, 'Cancelaciones de Agregador', agregador, numero_pedido,
+         folio_o_cero, CAST(ROUND(cancelacion) AS INT64)
+  FROM p WHERE ROUND(cancelacion) != 0
+)
+
+SELECT
+  cc AS `Código centro costo`,
+  COALESCE(nombre_plataforma, sucursal) AS `Sucursal`,
+  FORMAT_DATE('%d/%m/%Y', fecha_real) AS `Fecha`,
+  medio AS `Medio de Pago`,
+  agregador AS `Agregador`,
+  numero_pedido AS `Código de orden`,
+  boleta AS `Número de boleta`,
+  valor AS `Valor`
+FROM lineas

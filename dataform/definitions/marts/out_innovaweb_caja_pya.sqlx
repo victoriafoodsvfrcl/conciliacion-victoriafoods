@@ -1,0 +1,15 @@
+config {
+  type: "table",
+  schema: "marts",
+  tags: ["pya", "innovaweb"],
+  description: "Archivo para Innovaweb (informe de caja, columna Pedidos YA): Σ monto_caja por CC y fecha real. Formato exacto de columnas (nombres flexibles de BigQuery). Único por (cc, fecha) por construcción (GROUP BY)."
+}
+
+SELECT
+  p.cc AS `Código centro costo`,
+  ANY_VALUE(COALESCE(p.nombre_plataforma, p.sucursal)) AS `Sucursal`,
+  FORMAT_DATE('%d/%m/%Y', p.fecha_real) AS `Fecha de informe`,
+  CAST(SUM(p.monto_caja) AS INT64) AS `Pedidos YA`
+FROM ${ref("fct_pya_pedido")} AS p
+WHERE p.cc IS NOT NULL AND p.fecha_real IS NOT NULL
+GROUP BY p.cc, p.fecha_real

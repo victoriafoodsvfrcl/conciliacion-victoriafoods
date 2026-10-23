@@ -1,0 +1,141 @@
+config {
+  type: "table",
+  schema: "core",
+  tags: ["pya"],
+  description: "Conciliación semanal PYA (lun–dom): detalle vs PDF vs banco vs factura RCV. ESPEJO de reglas.pya.calcular_semana.",
+  assertions: { uniqueKey: ["periodo_inicio"] }
+}
+
+js {
+  const c = constantes;
+}
+
+WITH lin AS (
+  -- TODAS las líneas (incluye duplicados), igual que el PDF
+  SELECT
+    periodo_inicio,
+    ANY_VALUE(periodo_fin) AS periodo_fin,
+    ANY_VALUE(periodo) AS periodo,
+    COUNT(*) AS n_lineas,
+    COUNTIF(tipo = 'Venta') AS n_lineas_venta,
+    SUM(comision) AS sum_comision,
+    SUM(cargo_plus) AS sum_plus,
+    SUM(fugaz) AS publicidad,
+    SUM(dcto_usuarios_pya_neto) AS sum_dcto_usuarios,
+    SUM(dcto_comercial_pya_neto) AS sum_dcto_comercial,
+    SUM(dcto_retiro_pya_neto) AS sum_dcto_retiro,
+    SUM(IF(tipo = 'Venta', neto_venta, 0)) AS k_venta,
+    SUM(IF(tipo = 'Reintegros', neto_venta, 0)) AS k_reintegros,
+    SUM(IF(tipo = 'Cargos', neto_venta, 0)) AS k_cargos
+  FROM ${ref("fct_pya_linea")}
+  GROUP BY periodo_inicio
+),
+pdf AS (
+  SELECT * FROM ${ref("stg_pya_estado_cuenta")}
+),
+semana AS (
+  SELECT
+    COALESCE(lin.periodo_inicio, pdf.periodo_inicio) AS periodo_inicio,
+    COALESCE(lin.periodo_fin, pdf.periodo_fin) AS periodo_fin,
+    lin.* EXCEPT (periodo_inicio, periodo_fin),
+    pdf.total_liquidado AS total_pdf,
+    pdf.cuadra AS pdf_cuadra_internamente,
+    pdf.fecha_pago AS fecha_pago_pdf,
+    pdf.razon_social AS razon_social_pdf,
+    pdf.comision_pedidos AS pdf_comision_pedidos,
+    pdf.costo_plus AS pdf_costo_plus,
+    pdf.tarifa_fugaces AS pdf_tarifa_fugaces,
+    pdf.impuestos AS pdf_impuestos,
+    ABS(COALESCE(pdf.costos_envio, 0)) AS costo_envio,
+    COALESCE(pdf.ajustes_liquidacion, 0) AS ajustes
+  FROM lin
+  FULL OUTER JOIN pdf ON pdf.periodo_inicio = lin.periodo_inicio
+),
+calc AS (
+  SELECT
+    *,
+    sum_comision + sum_plus + publicidad - sum_dcto_usuarios - sum_dcto_comercial - sum_dcto_retiro + costo_envio
+      AS neto_factura_calc
+  FROM semana
+),
+calc2 AS (
+  SELECT
+    *,
+    ${c.N_IVA} * neto_factura_calc AS iva_calc,
+    k_venta + (sum_dcto_usuarios + sum_dcto_comercial + sum_dcto_retiro) + k_reintegros + k_cargos
+      - sum_comision - sum_plus - publicidad - ROUND(${c.N_IVA} * neto_factura_calc) + ajustes AS liquidacion_calc
+  FROM calc
+),
+
+-- Abono PYA en banco: RUT 76211425-9, fecha contable entre fin+1 y fin+12, |dif| <= TOL_BANCO.
+-- Un abono se asigna a una sola semana. Espejo: reglas.pya.asignar_abono.
+candidatos_abono AS (
+  SELECT
+    s.periodo_inicio, m.movimiento_id, m.fecha_contable, m.monto, m.nro_operacion,
+    ABS(m.monto - s.total_pdf) AS dif
+  FROM calc2 AS s
+  JOIN ${ref("stg_bci_movimientos")} AS m
+    ON m.rut_origen = '${c.RUT_PYA}'
+   AND m.monto > 0
+   AND m.fecha_contable BETWEEN DATE_ADD(s.periodo_fin, INTERVAL ${c.VENTANA_ABONO_MIN} DAY)
+                            AND DATE_ADD(s.periodo_fin, INTERVAL ${c.VENTANA_ABONO_MAX} DAY)
+   AND ABS(m.monto - s.total_pdf) <= ${c.TOL_BANCO}
+),
+abono AS (
+  SELECT * FROM candidatos_abono
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY periodo_inicio ORDER BY dif, fecha_contable) = 1
+      AND ROW_NUMBER() OVER (PARTITION BY movimiento_id ORDER BY dif, periodo_inicio) = 1
+),
+
+-- Factura de comisión: proveedor PYA, tipo 33, fecha docto = lunes siguiente al fin del periodo.
+-- Espejo: reglas.pya.buscar_factura.
+factura AS (
+  SELECT s.periodo_inicio, f.folio, f.fecha_docto, f.monto_neto, f.monto_iva, f.monto_total
+  FROM calc2 AS s
+  JOIN ${ref("stg_sii_rcv_compras")} AS f
+    ON f.rut_proveedor = '${c.RUT_PYA}'
+   AND f.tipo_doc = '${c.TIPO_DTE_FACTURA}'
+   AND f.fecha_docto = DATE_ADD(s.periodo_fin, INTERVAL 1 DAY)
+   AND FORMAT_DATE('%u', f.fecha_docto) = '1'  -- lunes (ISO 8601)
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY s.periodo_inicio ORDER BY ABS(f.monto_neto - s.neto_factura_calc)) = 1
+),
+
+final AS (
+  SELECT
+    s.*,
+    s.liquidacion_calc - s.total_pdf AS dif_liquidacion_pdf,
+    a.movimiento_id AS abono_movimiento_id,
+    a.fecha_contable AS abono_fecha,
+    a.monto AS abono_monto,
+    a.nro_operacion AS abono_nro_operacion,
+    a.monto - s.total_pdf AS dif_pdf_banco,
+    f.folio AS factura_folio,
+    f.fecha_docto AS factura_fecha,
+    f.monto_neto AS factura_neto,
+    f.monto_iva AS factura_iva,
+    f.monto_neto - s.neto_factura_calc AS dif_neto_factura,
+    f.monto_iva - s.iva_calc AS dif_iva_factura,
+    f.monto_iva + s.pdf_impuestos AS dif_iva_factura_vs_pdf  -- impuestos del PDF vienen negativos
+  FROM calc2 AS s
+  LEFT JOIN abono AS a USING (periodo_inicio)
+  LEFT JOIN factura AS f USING (periodo_inicio)
+)
+
+SELECT
+  *,
+  ARRAY_CONCAT(
+    IF(total_pdf IS NULL, ['PDF_NO_CARGADO'], []),
+    IF(n_lineas IS NULL, ['DETALLE_NO_CARGADO'], []),
+    IF(ABS(COALESCE(dif_liquidacion_pdf, 0)) > ${c.TOL_SEMANA}, ['SEMANA_NO_CUADRA_PDF'], []),
+    IF(abono_movimiento_id IS NULL, ['ABONO_NO_ENCONTRADO'], []),
+    IF(factura_folio IS NULL, ['FACTURA_NO_ENCONTRADA'], []),
+    IF(factura_folio IS NOT NULL AND ABS(dif_neto_factura) > ${c.TOL_SEMANA}, ['FACTURA_NO_CUADRA'], [])
+  ) AS excepciones,
+  IF(
+    total_pdf IS NOT NULL AND n_lineas IS NOT NULL
+    AND ABS(dif_liquidacion_pdf) <= ${c.TOL_SEMANA}
+    AND abono_movimiento_id IS NOT NULL
+    AND factura_folio IS NOT NULL AND ABS(dif_neto_factura) <= ${c.TOL_SEMANA},
+    'OK', 'REVISAR'
+  ) AS estado
+FROM final

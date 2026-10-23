@@ -1,0 +1,13 @@
+# Dataform (BigQuery) — conciliación de ventas Victoria Foods.
+# defaultProject se sobrescribe por entorno desde el release config (Terraform) o con
+#   dataform compile --default-database=<project_id>
+defaultProject: vf-conciliacion-dev
+defaultLocation: southamerica-west1
+defaultDataset: core
+defaultAssertionDataset: assertions
+dataformCoreVersion: 3.0.0
+vars:
+  # dataset donde el loader Python deja las tablas crudas
+  dataset_raw: raw
+  # si se define (p. ej. "vf-conciliacion-exports"), los marts Innovaweb se exportan a CSV en GCS
+  export_bucket: ""

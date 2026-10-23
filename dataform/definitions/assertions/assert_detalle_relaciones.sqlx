@@ -1,0 +1,21 @@
+config {
+  type: "assertion",
+  tags: ["pya", "calidad"],
+  description: "Relaciones verificadas del detalle PYA (Tipo=Venta): neto = bruto − local − 1,19·(comercial+usuarios+retiro); comisionable = bruto − local − fugaz; comision = ROUND(comisionable × 0,16). Espejo: reglas.pya.validar_relaciones_linea."
+}
+
+js {
+  const c = constantes;
+}
+
+SELECT periodo, numero_pedido, sucursal, monto_bruto, neto_venta, monto_comisionable, comision,
+  ABS(monto_bruto - dcto_local - ${c.N_FACTOR_IVA} * (dcto_comercial_pya_neto + dcto_usuarios_pya_neto + dcto_retiro_pya_neto) - neto_venta) > ${c.TOL_REDONDEO} AS falla_neto,
+  ABS(monto_bruto - dcto_local - fugaz - monto_comisionable) > ${c.TOL_REDONDEO} AS falla_comisionable,
+  ABS(ROUND(monto_comisionable * NUMERIC '${c.COMISION}') - comision) > ${c.TOL_REDONDEO} AS falla_comision
+FROM ${ref("fct_pya_linea")}
+WHERE tipo = 'Venta'
+  AND (
+    ABS(monto_bruto - dcto_local - ${c.N_FACTOR_IVA} * (dcto_comercial_pya_neto + dcto_usuarios_pya_neto + dcto_retiro_pya_neto) - neto_venta) > ${c.TOL_REDONDEO}
+    OR ABS(monto_bruto - dcto_local - fugaz - monto_comisionable) > ${c.TOL_REDONDEO}
+    OR ABS(ROUND(monto_comisionable * NUMERIC '${c.COMISION}') - comision) > ${c.TOL_REDONDEO}
+  )
