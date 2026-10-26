@@ -139,13 +139,33 @@ def construir_parser() -> argparse.ArgumentParser:
     return p
 
 
+class FormatoJson(logging.Formatter):
+    """Una línea JSON por evento: Cloud Logging la agrupa como una sola entrada con severidad."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        evento = {"severity": record.levelname, "logger": record.name, "message": record.getMessage()}
+        if record.exc_info:
+            evento["error"] = f"{record.exc_info[0].__name__}: {record.exc_info[1]}"
+            evento["traceback"] = self.formatException(record.exc_info)
+        return json.dumps(evento, ensure_ascii=False, default=str)
+
+
+def _configurar_logs(verbose: bool) -> None:
+    h = logging.StreamHandler(sys.stderr)
+    h.setFormatter(FormatoJson())
+    raiz = logging.getLogger()
+    raiz.handlers[:] = [h]
+    raiz.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = construir_parser().parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format='{"severity":"%(levelname)s","logger":"%(name)s","message":"%(message)s"}',
-    )
-    return args.fn(args)
+    _configurar_logs(args.verbose)
+    try:
+        return args.fn(args)
+    except Exception as e:
+        log.exception("Falló el comando '%s': %s", args.cmd, e)
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

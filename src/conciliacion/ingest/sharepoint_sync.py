@@ -48,6 +48,24 @@ class ArchivoRemoto:
     url_descarga: str | None = None
 
 
+class ErrorAutenticacionGraph(RuntimeError):
+    """Microsoft Entra ID rechazó la solicitud de token (credenciales, tenant o permisos)."""
+
+
+def _describir_error_token(r: requests.Response) -> str:
+    try:
+        d = r.json()
+    except ValueError:
+        d = {}
+    codigo = d.get("error", "sin_codigo")
+    detalle = (d.get("error_description") or r.text or "").splitlines()
+    detalle = detalle[0] if detalle else ""
+    return (
+        f"Microsoft rechazó el token de Graph (HTTP {r.status_code}, {codigo}): {detalle}. "
+        "Revise GRAPH_TENANT_ID, GRAPH_CLIENT_ID y el secreto graph-client-secret."
+    )
+
+
 class GraphClient:
     def __init__(
         self,
@@ -76,7 +94,8 @@ class GraphClient:
             },
             timeout=self.timeout,
         )
-        r.raise_for_status()
+        if not r.ok:
+            raise ErrorAutenticacionGraph(_describir_error_token(r))
         datos = r.json()
         self._token, self._expira = datos["access_token"], time.time() + int(datos.get("expires_in", 3600))
         return self._token
