@@ -93,3 +93,15 @@ def test_extraer_texto_pdf_real_generado():
     cab, part = PyaEstadoCuentaPdf().parse(buf.getvalue(), "estado de cuenta.pdf")
     assert part.df["monto"].notna().all()
     assert cab.df["total_liquidado"].iloc[0] == 437_018_419 and bool(cab.df["cuadra"].iloc[0])
+
+
+def test_reconoce_nombre_real_del_pdf_en_sharepoint():
+    from conciliacion.adapters import POR_ID
+
+    pdf = POR_ID["pya_estado_cuenta_pdf"]
+    liq = POR_ID["pya_liquidacion_detalle"]
+    ruta = "AI - Recaudación/Pedidos Ya/Estados de Cuenta"
+    assert pdf.matches("05-10 al 11-10.pdf", ruta)
+    assert not liq.matches("05-10 al 11-10.pdf", ruta)
+    assert liq.matches("05-10 al 11-10.xls", ruta)
+    assert not pdf.matches("05-10 al 11-10.xls", ruta)

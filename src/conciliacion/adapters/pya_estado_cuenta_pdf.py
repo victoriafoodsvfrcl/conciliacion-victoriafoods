@@ -247,7 +247,13 @@ class PyaEstadoCuentaPdf(Adaptador):
     source_id = "pya_estado_cuenta_pdf"
     schema_version = "1"
     descripcion = "Resumen semanal de liquidación PedidosYa (PDF)"
-    patrones = (r"estado.{0,3}de.{0,3}cuenta[^/]*\.pdf$", r"pedidos\s*ya[^/]*\.pdf$", r"/pya/[^/]*\.pdf$")
+    patrones = (
+        r"estado.{0,3}de.{0,3}cuenta[^/]*\.pdf$",
+        r"pedidos\s*ya[^/]*\.pdf$",
+        r"/pya/[^/]*\.pdf$",
+        # Nombre real del PDF semanal en SharePoint: "Estados de Cuenta/05-10 al 11-10.pdf"
+        r"\d{1,2}-\d{1,2}\s*al\s*\d{1,2}-\d{1,2}[^/]*\.pdf$",
+    )
     esquemas = {"pya_estado_cuenta_cabecera": ESQ_CAB, "pya_estado_cuenta_partidas": ESQ_PART}
 
     def parse(self, contenido: bytes, nombre: str, **params) -> list:
